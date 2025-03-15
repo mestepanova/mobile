@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "stepanova"
+rootProject.name = "Stepanova"
 include(":app")
  

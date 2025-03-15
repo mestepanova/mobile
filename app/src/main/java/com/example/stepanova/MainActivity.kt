@@ -6,46 +6,15 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.Typography
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -61,18 +30,110 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.wear.compose.material.ExperimentalWearMaterialApi
+import androidx.wear.compose.material.FractionalThreshold
+import androidx.wear.compose.material.rememberSwipeableState
+import androidx.wear.compose.material.swipeable
+import java.util.Calendar
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+class MenstruationViewModel : ViewModel() {
+    private val _currentCalendar = MutableStateFlow(
+        Calendar.getInstance().apply { set(2025, 1, 1) }
+    )
+    val currentCalendar: StateFlow<Calendar> = _currentCalendar.asStateFlow()
+
+    private val _periodStartCalendar = MutableStateFlow(
+        Calendar.getInstance().apply { set(2025, 1, 23) }
+    )
+    val periodStartCalendar: StateFlow<Calendar> = _periodStartCalendar.asStateFlow()
+
+    private val _highlightedDays = MutableStateFlow(mutableListOf<Calendar>())
+    val highlightedDays: StateFlow<List<Calendar>> = _highlightedDays.asStateFlow()
+
+    private val _isEditing = MutableStateFlow(false)
+    val isEditing: StateFlow<Boolean> = _isEditing.asStateFlow()
+
+    private val _menstruationDates = MutableStateFlow(
+        mutableListOf(
+            Calendar.getInstance().apply { set(2025, 1, 23) }
+        )
+    )
+    val menstruationDates: StateFlow<List<Calendar>> = _menstruationDates.asStateFlow()
+
+    private val _cycleDayAndPhase = MutableStateFlow(calculateCycleDayAndPhase(28, 5))
+    val cycleDayAndPhase: StateFlow<Pair<Int, String>> = _cycleDayAndPhase.asStateFlow()
+
+    fun onSwipe(direction: Int) {
+        val newCalendar = Calendar.getInstance().apply {
+            time = _currentCalendar.value.time
+            add(Calendar.MONTH, if (direction == -1) 1 else -1)
+        }
+        _currentCalendar.value = newCalendar
+    }
+
+    fun toggleEditing() {
+        _isEditing.value = !_isEditing.value
+    }
+
+    fun onDayClicked(day: Calendar) {
+        if (!_isEditing.value) return
+        val newList = _highlightedDays.value.toMutableList()
+        val isAlreadyHighlighted = newList.any { it.timeInMillis == day.timeInMillis }
+        if (isAlreadyHighlighted) {
+            newList.removeAll { it.timeInMillis == day.timeInMillis }
+        } else {
+            newList.add(day.clone() as Calendar)
+        }
+        _highlightedDays.value = newList
+
+        if (!isAlreadyHighlighted) {
+            val newDates = _menstruationDates.value.toMutableList()
+            newDates.add(day.clone() as Calendar)
+            _menstruationDates.value = newDates.sortedBy { it.timeInMillis }.toMutableList()
+        }
+    }
+
+    private fun calculateCycleDayAndPhase(cycleLength: Int, menstruationLength: Int): Pair<Int, String> {
+        val currentDate = Calendar.getInstance()
+        val menstruationDates = _menstruationDates.value
+
+        val lastMenstruationStart = menstruationDates
+            .filter { it.timeInMillis <= currentDate.timeInMillis }
+            .maxByOrNull { it.timeInMillis } ?: menstruationDates.first()
+
+        val diffInMillis = currentDate.timeInMillis - lastMenstruationStart.timeInMillis
+        val diffInDays = (diffInMillis / (1000 * 60 * 60 * 24)).toInt()
+        val cycleDay = (diffInDays % cycleLength) + 1
+
+        val phase = when {
+            cycleDay <= menstruationLength -> "Менструальная"
+            cycleDay <= cycleLength / 2 -> "Фолликулярная"
+            cycleDay in (cycleLength / 2 - 1)..(cycleLength / 2 + 1) -> "Овуляция"
+            else -> "Лютеиновая"
+        }
+
+        return Pair(cycleDay, phase)
+    }
+
+    fun updateCycleParameters(cycleLength: Int, menstruationLength: Int) {
+        _cycleDayAndPhase.value = calculateCycleDayAndPhase(cycleLength, menstruationLength)
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            // Определяем семейство шрифтов Montserrat
             val montserratFontFamily = FontFamily(
                 Font(R.font.montserrat_regular, FontWeight.Normal),
                 Font(R.font.montserrat_bold, FontWeight.Bold)
@@ -180,11 +241,15 @@ class MainActivity : ComponentActivity() {
                 )
             )
 
-            // Применяем MaterialTheme с кастомной типографией
             MaterialTheme(typography = montserratTypography) {
                 val navController = rememberNavController()
                 var cycleLength by remember { mutableStateOf(28) }
                 var periodLength by remember { mutableStateOf(5) }
+                val viewModel: MenstruationViewModel = viewModel()
+
+                LaunchedEffect(cycleLength, periodLength) {
+                    viewModel.updateCycleParameters(cycleLength, periodLength)
+                }
 
                 NavHost(
                     navController = navController,
@@ -203,10 +268,10 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable("myMenstruation") {
-                        MyMenstruationScreen(navController)
+                        MyMenstruationScreen(navController, cycleLength, periodLength, viewModel)
                     }
                     composable("phaseScreen") {
-                        PhaseScreen(navController)
+                        PhaseScreen(navController, viewModel)
                     }
                     composable("settingsScreen") {
                         SettingsScreen(navController)
@@ -214,7 +279,10 @@ class MainActivity : ComponentActivity() {
                     composable("cycleScreen") {
                         CycleScreen(
                             navController = navController,
-                            initialCycleLength = cycleLength
+                            initialCycleLength = cycleLength,
+                            onSave = { newCycleLength ->
+                                cycleLength = newCycleLength
+                            }
                         )
                     }
                     composable("menstScreen") {
@@ -277,7 +345,6 @@ fun RegistrationScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Поле для Email
             TextField(
                 value = email,
                 onValueChange = { email = it },
@@ -305,9 +372,8 @@ fun RegistrationScreen(
                 textStyle = TextStyle(textAlign = TextAlign.Center)
             )
 
-            Spacer(modifier = Modifier.height(16.dp)) // Отступ между полями
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Поле для пароля
             TextField(
                 value = password,
                 onValueChange = { password = it },
@@ -336,9 +402,8 @@ fun RegistrationScreen(
                 textStyle = TextStyle(textAlign = TextAlign.Center)
             )
 
-            Spacer(modifier = Modifier.height(16.dp)) // Отступ между полями
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Поле для подтверждения пароля
             TextField(
                 value = confirmPassword,
                 onValueChange = { confirmPassword = it },
@@ -384,7 +449,7 @@ fun RegistrationScreen(
             ) {
                 Text(
                     text = "Зарегистрироваться",
-                    fontSize = 20.sp // Увеличиваем шрифт до 20 sp
+                    fontSize = 20.sp
                 )
             }
 
@@ -436,7 +501,7 @@ fun LoginScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(32.dp)) // Опускаем текст ниже
+            Spacer(modifier = Modifier.height(32.dp))
             Text(
                 text = "Введите свой Email и пароль",
                 style = MaterialTheme.typography.bodyLarge,
@@ -451,7 +516,6 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Поле для Email
             TextField(
                 value = email,
                 onValueChange = { email = it },
@@ -463,9 +527,9 @@ fun LoginScreen(
                 placeholder = {
                     Text(
                         text = "Ваш Email",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), // Уменьшаем шрифт
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth() // Центрируем текст
+                        modifier = Modifier.fillMaxWidth()
                     )
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
@@ -476,12 +540,11 @@ fun LoginScreen(
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent
                 ),
-                textStyle = TextStyle(textAlign = TextAlign.Center) // Центрируем вводимый текст
+                textStyle = TextStyle(textAlign = TextAlign.Center)
             )
 
-            Spacer(modifier = Modifier.height(16.dp)) // Отступ между полями
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Поле для пароля
             TextField(
                 value = password,
                 onValueChange = { password = it },
@@ -493,9 +556,9 @@ fun LoginScreen(
                 placeholder = {
                     Text(
                         text = "Ваш Пароль",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), // Уменьшаем шрифт
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth() // Центрируем текст
+                        modifier = Modifier.fillMaxWidth()
                     )
                 },
                 visualTransformation = PasswordVisualTransformation(),
@@ -507,7 +570,7 @@ fun LoginScreen(
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent
                 ),
-                textStyle = TextStyle(textAlign = TextAlign.Center) // Центрируем вводимый текст
+                textStyle = TextStyle(textAlign = TextAlign.Center)
             )
         }
 
@@ -582,16 +645,50 @@ fun BottomNavigationBar(navController: androidx.navigation.NavController) {
     }
 }
 
+@OptIn(ExperimentalWearMaterialApi::class)
 @Composable
-fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
-    var isAddNoteClicked by remember { mutableStateOf(false) }
+fun MyMenstruationScreen(
+    navController: androidx.navigation.NavController,
+    cycleLength: Int,
+    periodLength: Int,
+    viewModel: MenstruationViewModel
+) {
+    val currentCalendar by viewModel.currentCalendar.collectAsState()
+    val periodStartCalendar by viewModel.periodStartCalendar.collectAsState()
+    val highlightedDays by viewModel.highlightedDays.collectAsState()
+    val isEditing by viewModel.isEditing.collectAsState()
+    val cycleDayAndPhase by viewModel.cycleDayAndPhase.collectAsState() // Получаем текущий день цикла и фазу
+    val (cycleDay, _) = cycleDayAndPhase // Извлекаем только день цикла
+
+    val swipeState = rememberSwipeableState(0)
+    val swipeRange = 300f
+
+    val todayCalendar = Calendar.getInstance()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFFEF7FF))
-            .padding(16.dp),
+            .padding(16.dp)
+            .swipeable(
+                state = swipeState,
+                anchors = mapOf(
+                    0f to 0,
+                    -swipeRange to -1,
+                    swipeRange to 1
+                ),
+                thresholds = { _, _ -> FractionalThreshold(0.3f) },
+                orientation = Orientation.Horizontal
+            ),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        LaunchedEffect(swipeState.currentValue) {
+            if (swipeState.currentValue != 0) {
+                viewModel.onSwipe(swipeState.currentValue)
+                swipeState.snapTo(0)
+            }
+        }
+
         Column(
             modifier = Modifier.weight(1f),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -599,7 +696,7 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
         ) {
             Text(
                 text = "Моя Менструация",
-                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp), // Заголовок 32 sp
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp),
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
@@ -614,7 +711,7 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                     .padding(16.dp)
             ) {
                 Text(
-                    text = "Февраль 2025",
+                    text = "${getMonthName(currentCalendar.get(Calendar.MONTH) + 1)} ${currentCalendar.get(Calendar.YEAR)}",
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
@@ -626,7 +723,7 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                     listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс").forEach { day ->
                         Text(
                             text = day,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 20.sp), // Дни недели 20 sp
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 20.sp),
                             modifier = Modifier.weight(1f),
                             textAlign = TextAlign.Center
                         )
@@ -639,14 +736,16 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
 
-                val daysInFebruary = 28
-                val firstDayOffset = 5
+                val daysInMonth = currentCalendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+                val firstDayCalendar = Calendar.getInstance().apply {
+                    time = currentCalendar.time
+                    set(Calendar.DAY_OF_MONTH, 1)
+                }
+                val firstDayOffset = (firstDayCalendar.get(Calendar.DAY_OF_WEEK) + 5) % 7
                 val weeks = 6
 
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.White)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     for (week in 0 until weeks) {
                         Row(
@@ -655,18 +754,46 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                         ) {
                             for (dayOfWeek in 0 until 7) {
                                 val dayNumber = week * 7 + dayOfWeek - firstDayOffset + 1
-                                val isHighlighted = dayNumber in 3..7
+                                val currentDayCalendar = if (dayNumber in 1..daysInMonth) {
+                                    Calendar.getInstance().apply {
+                                        time = currentCalendar.time
+                                        set(Calendar.DAY_OF_MONTH, dayNumber)
+                                    }
+                                } else null
+
+                                val isPeriodDay = currentDayCalendar?.let {
+                                    val periodEndCalendar = Calendar.getInstance().apply {
+                                        time = periodStartCalendar.time
+                                        add(Calendar.DAY_OF_MONTH, periodLength)
+                                    }
+                                    it.timeInMillis >= periodStartCalendar.timeInMillis &&
+                                            it.timeInMillis < periodEndCalendar.timeInMillis
+                                } ?: false
+
+                                val isHighlightedDay = currentDayCalendar?.let { day ->
+                                    highlightedDays.any { it.timeInMillis == day.timeInMillis }
+                                } ?: false
+
+                                val isHighlighted = isPeriodDay || isHighlightedDay
+
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .aspectRatio(1f)
                                         .border(0.5.dp, Color.Gray)
                                         .background(if (isHighlighted) Color.Red.copy(alpha = 0.2f) else Color.Transparent)
+                                        .clickable(
+                                            enabled = isEditing && dayNumber in 1..daysInMonth
+                                        ) {
+                                            currentDayCalendar?.let { day ->
+                                                viewModel.onDayClicked(day)
+                                            }
+                                        }
                                 ) {
-                                    if (dayNumber in 1..daysInFebruary) {
+                                    if (dayNumber in 1..daysInMonth) {
                                         Text(
                                             text = dayNumber.toString(),
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 20.sp), // Числа в календаре 20 sp
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 20.sp),
                                             modifier = Modifier.align(Alignment.Center),
                                             textAlign = TextAlign.Center
                                         )
@@ -678,9 +805,7 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                 }
 
                 Button(
-                    onClick = {
-                        isAddNoteClicked = !isAddNoteClicked
-                    },
+                    onClick = { viewModel.toggleEditing() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
@@ -692,8 +817,8 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                     )
                 ) {
                     Text(
-                        text = if (isAddNoteClicked) "Подтвердить" else "Редактировать",
-                        fontSize = 20.sp // Кнопка 20 sp
+                        text = if (isEditing) "Подтвердить" else "Редактировать",
+                        fontSize = 20.sp
                     )
                 }
             }
@@ -710,14 +835,14 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "23 февраля",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp), // Панель между кнопками 16 sp
+                    text = "${todayCalendar.get(Calendar.DAY_OF_MONTH)} ${getMonthName(todayCalendar.get(Calendar.MONTH) + 1)}",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                     textAlign = TextAlign.Left,
                     modifier = Modifier.align(Alignment.Start)
                 )
                 Text(
-                    text = "1 день цикла",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.sp), // Панель между кнопками 16 sp
+                    text = "$cycleDay день цикла", // Отображаем текущий день цикла
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.sp),
                     textAlign = TextAlign.Left,
                     modifier = Modifier
                         .padding(top = 4.dp)
@@ -749,11 +874,57 @@ fun MyMenstruationScreen(navController: androidx.navigation.NavController) {
 }
 
 @Composable
-fun PhaseScreen(navController: androidx.navigation.NavController) {
+fun PhaseScreen(
+    navController: androidx.navigation.NavController,
+    viewModel: MenstruationViewModel
+) {
+    val cycleDayAndPhase by viewModel.cycleDayAndPhase.collectAsState()
+    val (cycleDay, phase) = cycleDayAndPhase
+
+    val backgroundColor = when (phase) {
+        "Менструальная" -> Color(0xFFEBC6C6)
+        "Фолликулярная" -> Color(0xFFD4EAF7)
+        "Овуляция" -> Color(0xFFFAD4B5)
+        "Лютеиновая" -> Color(0xFFD8C2E0)
+        else -> Color(0xFFFEF7FF)
+    }
+
+    val phaseText = when (phase) {
+        "Менструальная" -> "Менструация"
+        "Фолликулярная" -> "Фолликулярная"
+        "Овуляция" -> "Овуляция"
+        "Лютеиновая" -> "Лютеиновая"
+        else -> "Неизвестная фаза"
+    }
+
+    val nutritionText = when (phase) {
+        "Менструальная" -> "Ешь теплые, питательные блюда, больше железа"
+        "Фолликулярная" -> "Больше белка и сложных углеводов"
+        "Овуляция" -> "Добавь больше овощей, зелени и полезных жиров"
+        "Лютеиновая" -> "Больше белка, полезных жиров, магния, меньше сахара и соли."
+        else -> "Сбалансированное питание"
+    }
+
+    val workoutText = when (phase) {
+        "Менструальная" -> "Сосредоточься на легкой растяжке и ходьбе"
+        "Фолликулярная" -> "Увеличивай нагрузки, тренируйся интенсивнее и дольше"
+        "Овуляция" -> "Пробуй новые виды нагрузок и соревнования"
+        "Лютеиновая" -> "Умеренные силовые нагрузки, йога, растяжка, меньше кардио."
+        else -> "Лёгкая активность"
+    }
+
+    val productivityText = when (phase) {
+        "Менструальная" -> "Делай только важное, минимизируй когнитивные нагрузки"
+        "Фолликулярная" -> "Планируй сложные задачи, мозг работает продуктивнее"
+        "Овуляция" -> "Используй соцактивность — договаривайся, презентуй идеи."
+        "Лютеиновая" -> "Планируй заранее, больше отдыха, фокус на рутинные задачи."
+        else -> "Обычная продуктивность"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFEBC6C6))
+            .background(backgroundColor)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -799,7 +970,7 @@ fun PhaseScreen(navController: androidx.navigation.NavController) {
                     )
                 )
                 Text(
-                    text = "Менструация",
+                    text = phaseText,
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -825,7 +996,7 @@ fun PhaseScreen(navController: androidx.navigation.NavController) {
                     )
                 )
                 Text(
-                    text = "Ешь теплые, питательные блюда, больше железа",
+                    text = nutritionText,
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -851,7 +1022,7 @@ fun PhaseScreen(navController: androidx.navigation.NavController) {
                     )
                 )
                 Text(
-                    text = "Сосредоточься на легкой растяжке и ходьбе",
+                    text = workoutText,
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -877,7 +1048,7 @@ fun PhaseScreen(navController: androidx.navigation.NavController) {
                     )
                 )
                 Text(
-                    text = "Делай только важное, минимизируй когнитивные нагрузки",
+                    text = productivityText,
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -889,7 +1060,6 @@ fun PhaseScreen(navController: androidx.navigation.NavController) {
         BottomNavigationBar(navController)
     }
 }
-
 
 @Composable
 fun SettingsScreen(navController: androidx.navigation.NavController) {
@@ -960,7 +1130,7 @@ fun SettingsScreen(navController: androidx.navigation.NavController) {
                 )
 
                 Button(
-                    onClick = { },
+                    onClick = { /* Логика удаления данных */ },
                     shape = RoundedCornerShape(6.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1036,7 +1206,8 @@ fun SettingsScreen(navController: androidx.navigation.NavController) {
 @Composable
 fun CycleScreen(
     navController: androidx.navigation.NavController,
-    initialCycleLength: Int
+    initialCycleLength: Int,
+    onSave: (Int) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1050,7 +1221,7 @@ fun CycleScreen(
             modifier = Modifier
                 .fillMaxWidth()
         ) {
-            Spacer(modifier = Modifier.height(80.dp)) // Отступ 80 пикселей сверху
+            Spacer(modifier = Modifier.height(80.dp))
             Text(
                 text = buildAnnotatedString {
                     withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
@@ -1060,15 +1231,14 @@ fun CycleScreen(
                         append("длина цикла")
                     }
                 },
-                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp), // Размер шрифта 32 sp
-                modifier = Modifier
-                    .fillMaxWidth(),
-                textAlign = TextAlign.Center, // Центрирование текста
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
                 color = Color.Black
             )
         }
 
-        val days = (1..31).toList()
+        val days = (21..30).toList()
         val lazyListState = rememberLazyListState()
         var selectedIndex by remember { mutableStateOf(days.indexOf(initialCycleLength)) }
 
@@ -1087,7 +1257,7 @@ fun CycleScreen(
             snapshotFlow { lazyListState.firstVisibleItemIndex }
                 .collect { firstVisibleIndex ->
                     val centerIndex = firstVisibleIndex + 2
-                    selectedIndex = infiniteDays[centerIndex] - 1
+                    selectedIndex = infiniteDays[centerIndex] - 21
                 }
         }
 
@@ -1105,7 +1275,7 @@ fun CycleScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 itemsIndexed(infiniteDays) { index, day ->
-                    val isSelected = day - 1 == selectedIndex
+                    val isSelected = day - 21 == selectedIndex
                     Text(
                         text = "$day дней",
                         fontSize = 20.sp,
@@ -1126,8 +1296,12 @@ fun CycleScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(45.dp))
         Button(
-            onClick = { navController.navigate("menstScreen") },
+            onClick = {
+                onSave(selectedIndex + 21)
+                navController.navigate("menstScreen")
+            },
             shape = RoundedCornerShape(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -1138,7 +1312,7 @@ fun CycleScreen(
             )
         ) {
             Text(
-                text = "Далее",
+                text = "Сохранить",
                 fontSize = 20.sp
             )
         }
@@ -1163,7 +1337,7 @@ fun MenstScreen(
             modifier = Modifier
                 .fillMaxWidth()
         ) {
-            Spacer(modifier = Modifier.height(80.dp)) // Отступ 80 пикселей сверху
+            Spacer(modifier = Modifier.height(80.dp))
             Text(
                 text = buildAnnotatedString {
                     withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
@@ -1174,14 +1348,13 @@ fun MenstScreen(
                     }
                 },
                 style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp),
-                modifier = Modifier
-                    .fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
                 color = Color.Black
             )
         }
 
-        val days = (1..7).toList()
+        val days = (3..7).toList()
         val lazyListState = rememberLazyListState()
         var selectedIndex by remember { mutableStateOf(days.indexOf(initialPeriodLength)) }
         val infiniteDays = remember {
@@ -1199,7 +1372,7 @@ fun MenstScreen(
             snapshotFlow { lazyListState.firstVisibleItemIndex }
                 .collect { firstVisibleIndex ->
                     val centerIndex = firstVisibleIndex + 2
-                    selectedIndex = infiniteDays[centerIndex] - 1
+                    selectedIndex = infiniteDays[centerIndex] - 3
                 }
         }
 
@@ -1217,7 +1390,7 @@ fun MenstScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 itemsIndexed(infiniteDays) { index, day ->
-                    val isSelected = day - 1 == selectedIndex
+                    val isSelected = day - 3 == selectedIndex
                     Text(
                         text = "$day дней",
                         fontSize = 20.sp,
@@ -1238,10 +1411,9 @@ fun MenstScreen(
             }
         }
 
-        // Поднимаем кнопку на 60 пикселей от низа
         Spacer(modifier = Modifier.height(45.dp))
         Button(
-            onClick = { onSave(selectedIndex + 1) },
+            onClick = { onSave(selectedIndex + 3) },
             shape = RoundedCornerShape(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -1259,64 +1431,20 @@ fun MenstScreen(
     }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun LoginScreenPreview() {
-    MaterialTheme {
-        LoginScreen(
-            onLoginClick = {},
-            onRegisterClick = {}
-        )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun RegistrationScreenPreview() {
-    MaterialTheme {
-        RegistrationScreen(
-            onRegisterClick = {},
-            onLoginClick = {}
-        )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MyMenstruationScreenPreview() {
-    MaterialTheme {
-        MyMenstruationScreen(rememberNavController())
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun PhaseScreenPreview() {
-    MaterialTheme {
-        PhaseScreen(rememberNavController())
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun SettingsScreenPreview() {
-    MaterialTheme {
-        SettingsScreen(rememberNavController())
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun CycleScreenPreview() {
-    MaterialTheme {
-        CycleScreen(rememberNavController(), 28)
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MenstScreenPreview() {
-    MaterialTheme {
-        MenstScreen(rememberNavController(), 5, {})
+fun getMonthName(month: Int): String {
+    return when (month) {
+        1 -> "Январь"
+        2 -> "Февраль"
+        3 -> "Март"
+        4 -> "Апрель"
+        5 -> "Май"
+        6 -> "Июнь"
+        7 -> "Июль"
+        8 -> "Август"
+        9 -> "Сентябрь"
+        10 -> "Октябрь"
+        11 -> "Ноябрь"
+        12 -> "Декабрь"
+        else -> "Неизвестно"
     }
 }
