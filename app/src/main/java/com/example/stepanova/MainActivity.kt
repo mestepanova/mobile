@@ -57,7 +57,7 @@ class MenstruationViewModel : ViewModel() {
     )
     val periodStartCalendar: StateFlow<Calendar> = _periodStartCalendar.asStateFlow()
 
-    private val _highlightedDays = MutableStateFlow(mutableListOf<Calendar>())
+    val _highlightedDays = MutableStateFlow(mutableListOf<Calendar>())
     val highlightedDays: StateFlow<List<Calendar>> = _highlightedDays.asStateFlow()
 
     private val _isEditing = MutableStateFlow(false)
@@ -85,22 +85,32 @@ class MenstruationViewModel : ViewModel() {
         _isEditing.value = !_isEditing.value
     }
 
-    fun onDayClicked(day: Calendar) {
+    fun onDayClicked(day: Calendar, menstruationLength: Int) {
         if (!_isEditing.value) return
         val newList = _highlightedDays.value.toMutableList()
+        val newDates = _menstruationDates.value.toMutableList()
         val isAlreadyHighlighted = newList.any { it.timeInMillis == day.timeInMillis }
-        if (isAlreadyHighlighted) {
-            newList.removeAll { it.timeInMillis == day.timeInMillis }
-        } else {
-            newList.add(day.clone() as Calendar)
-        }
-        _highlightedDays.value = newList
 
-        if (!isAlreadyHighlighted) {
-            val newDates = _menstruationDates.value.toMutableList()
-            newDates.add(day.clone() as Calendar)
-            _menstruationDates.value = newDates.sortedBy { it.timeInMillis }.toMutableList()
+        if (isAlreadyHighlighted) {
+            // Убираем выделение только для нажатого дня
+            newList.removeAll { it.timeInMillis == day.timeInMillis }
+            newDates.removeAll { it.timeInMillis == day.timeInMillis }
+        } else {
+            // Добавляем нажатый день и следующие (menstruationLength - 1) дней
+            val daysToAdd = mutableListOf<Calendar>()
+            for (i in 0 until menstruationLength) {
+                val newDay = day.clone() as Calendar
+                newDay.add(Calendar.DAY_OF_MONTH, i)
+                if (!newList.any { it.timeInMillis == newDay.timeInMillis }) {
+                    daysToAdd.add(newDay)
+                }
+            }
+            newList.addAll(daysToAdd)
+            newDates.addAll(daysToAdd)
         }
+
+        _highlightedDays.value = newList.sortedBy { it.timeInMillis }.toMutableList()
+        _menstruationDates.value = newDates.sortedBy { it.timeInMillis }.toMutableList()
     }
 
     private fun calculateCycleDayAndPhase(cycleLength: Int, menstruationLength: Int): Pair<Int, String> {
@@ -657,13 +667,30 @@ fun MyMenstruationScreen(
     val periodStartCalendar by viewModel.periodStartCalendar.collectAsState()
     val highlightedDays by viewModel.highlightedDays.collectAsState()
     val isEditing by viewModel.isEditing.collectAsState()
-    val cycleDayAndPhase by viewModel.cycleDayAndPhase.collectAsState() // Получаем текущий день цикла и фазу
-    val (cycleDay, _) = cycleDayAndPhase // Извлекаем только день цикла
+    val cycleDayAndPhase by viewModel.cycleDayAndPhase.collectAsState()
+    val (cycleDay, _) = cycleDayAndPhase
 
     val swipeState = rememberSwipeableState(0)
     val swipeRange = 300f
 
     val todayCalendar = Calendar.getInstance()
+
+    // Инициализация highlightedDays начальными значениями при первом запуске
+    LaunchedEffect(Unit) {
+        if (highlightedDays.isEmpty()) {
+            val initialHighlighted = mutableListOf<Calendar>()
+            val periodEndCalendar = Calendar.getInstance().apply {
+                time = periodStartCalendar.time
+                add(Calendar.DAY_OF_MONTH, periodLength - 1)
+            }
+            var currentDay = periodStartCalendar.clone() as Calendar
+            while (currentDay.timeInMillis <= periodEndCalendar.timeInMillis) {
+                initialHighlighted.add(currentDay.clone() as Calendar)
+                currentDay.add(Calendar.DAY_OF_MONTH, 1)
+            }
+            viewModel._highlightedDays.value = initialHighlighted
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -761,32 +788,21 @@ fun MyMenstruationScreen(
                                     }
                                 } else null
 
-                                val isPeriodDay = currentDayCalendar?.let {
-                                    val periodEndCalendar = Calendar.getInstance().apply {
-                                        time = periodStartCalendar.time
-                                        add(Calendar.DAY_OF_MONTH, periodLength)
-                                    }
-                                    it.timeInMillis >= periodStartCalendar.timeInMillis &&
-                                            it.timeInMillis < periodEndCalendar.timeInMillis
-                                } ?: false
-
                                 val isHighlightedDay = currentDayCalendar?.let { day ->
                                     highlightedDays.any { it.timeInMillis == day.timeInMillis }
                                 } ?: false
-
-                                val isHighlighted = isPeriodDay || isHighlightedDay
 
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .aspectRatio(1f)
                                         .border(0.5.dp, Color.Gray)
-                                        .background(if (isHighlighted) Color.Red.copy(alpha = 0.2f) else Color.Transparent)
+                                        .background(if (isHighlightedDay) Color.Red.copy(alpha = 0.2f) else Color.Transparent)
                                         .clickable(
                                             enabled = isEditing && dayNumber in 1..daysInMonth
                                         ) {
                                             currentDayCalendar?.let { day ->
-                                                viewModel.onDayClicked(day)
+                                                viewModel.onDayClicked(day, periodLength) // Передаем periodLength
                                             }
                                         }
                                 ) {
@@ -841,7 +857,7 @@ fun MyMenstruationScreen(
                     modifier = Modifier.align(Alignment.Start)
                 )
                 Text(
-                    text = "$cycleDay день цикла", // Отображаем текущий день цикла
+                    text = "$cycleDay день цикла",
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.sp),
                     textAlign = TextAlign.Left,
                     modifier = Modifier
@@ -1312,7 +1328,7 @@ fun CycleScreen(
             )
         ) {
             Text(
-                text = "Сохранить",
+                text = "Далее",
                 fontSize = 20.sp
             )
         }
